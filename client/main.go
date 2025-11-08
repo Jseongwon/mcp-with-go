@@ -4,62 +4,73 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	// 1) Streamable HTTP 트랜스포트 생성
-	t, err := transport.NewStreamableHTTP("http://localhost:3000/mcp")
+	// server/main.go 기준: :8080 에서 /mcp 엔드포인트 사용
+	c, err := client.NewStreamableHttpClient("http://localhost:8080/mcp")
 	if err != nil {
-		log.Fatalf("failed to create transport: %v", err)
+		log.Fatalf("create client: %v", err)
 	}
-	defer t.Close()
+	defer func() {
+		if err := c.Close(); err != nil {
+			log.Printf("close client: %v", err)
+		}
+	}()
 
-	// 2) MCP 클라이언트 생성
-	c := client.NewClient(t)
-
-	// 3) 시작
-	if err := c.Start(ctx); err != nil {
-		log.Fatalf("failed to start client: %v", err)
-	}
-	defer c.Close()
-
-	// 4) initialize 호출 (Streamable HTTP 프로토콜 핸드셰이크)
-	_, err = c.Initialize(ctx, mcp.InitializeRequest{
+	// MCP Initialize 호출
+	initReq := mcp.InitializeRequest{
 		Params: mcp.InitializeParams{
-			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+			ProtocolVersion: "2025-03-26", // 현재 mcp-go가 사용하는 최신 MCP 스펙 버전
+			Capabilities:    mcp.ClientCapabilities{},
 			ClientInfo: mcp.Implementation{
-				Name:    "example-client",
-				Version: "0.0.1",
+				Name:    "go-demo-client",
+				Version: "0.1.0",
 			},
 		},
-	})
-	if err != nil {
-		log.Fatalf("initialize failed: %v", err)
 	}
 
-	// 5) echo 툴 호출
-	resp, err := c.CallTool(ctx, mcp.CallToolRequest{
+	if _, err := c.Initialize(ctx, initReq); err != nil {
+		log.Fatalf("initialize failed: %v", err)
+	}
+	fmt.Println("✅ Initialized against MCP server")
+
+	// echo 툴 호출
+	callReq := mcp.CallToolRequest{
 		Params: mcp.CallToolParams{
 			Name: "echo",
 			Arguments: map[string]any{
-				"text": "Hello from Streamable HTTP!",
+				"message": "이대로 붙여 넣으면 바로 돌아가는 구조예요.  \\n다음 단계로, Jeong의 NMS/쇼핑몰/알림 서비스를 MCP Tool 세트로 노출하는 버전도 원하시면, 지금 이 구조에 맞춰서 바로 설계/코드까지 만들어줄게요.\\n::contentReference[oaicite:4]{index=4}",
 			},
 		},
-	})
+	}
+
+	result, err := c.CallTool(ctx, callReq)
 	if err != nil {
 		log.Fatalf("call tool failed: %v", err)
 	}
 
-	// 6) 결과 출력 (텍스트 컨텐츠만 단순 파싱)
-	for _, content := range resp.Result.Content {
-		if txt, ok := content.(mcp.TextContent); ok {
-			fmt.Println("Tool result:", txt.Text)
+	// ✅ 여기서부터가 핵심: result는 *mcp.CallToolResult 이고,
+	// Content는 result.Content 로 바로 접근해야 합니다 (result.Result.Content 아님)
+	if result.IsError {
+		fmt.Println("Tool reported an error result:")
+		for i, content := range result.Content {
+			fmt.Printf("  [%d] %s\n", i, mcp.GetTextFromContent(content))
 		}
+		return
+	}
+
+	fmt.Println("✅ Tool call succeeded. Response content:")
+	for i, content := range result.Content {
+		// GetTextFromContent: TextContent든 map이든 알아서 string으로 뽑아주는 helper
+		text := mcp.GetTextFromContent(content)
+		fmt.Printf("  [%d] %s\n", i, text)
 	}
 }

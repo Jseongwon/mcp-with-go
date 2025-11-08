@@ -2,56 +2,49 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
-	"net/http"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 func main() {
-	// 1) MCP 서버 생성
+	// MCP 서버 생성
 	s := server.NewMCPServer(
-		"example-streamable-http",
-		"1.0.0",
-		server.WithToolCapabilities(true),
-		server.WithRecovery(),
-		server.WithLogging(),
+		"go-streamable-demo",
+		"0.1.0",
+		server.WithToolCapabilities(false), // 기본 MCP tool capabilities 광고
 	)
 
-	// 2) 간단한 echo 툴 정의
+	// echo 툴 정의
 	echoTool := mcp.NewTool(
 		"echo",
-		mcp.WithDescription("입력받은 text를 그대로 돌려줍니다."),
-		mcp.WithString(
-			"text",
+		mcp.WithDescription("Echo back the provided message"),
+		mcp.WithString("message",
 			mcp.Required(),
-			mcp.Description("echo 대상 문자열"),
+			mcp.Description("Message to echo"),
 		),
 	)
 
-	// 3) echo 툴 핸들러 등록 (타입 세이프 헬퍼 사용)
+	// echo 툴 핸들러 등록
 	s.AddTool(echoTool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		text, err := req.RequireString("text")
+		msg, err := req.RequireString("message")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			// 툴 내부 에러는 MCP 에러로 감싸서 반환
+			return mcp.NewToolResultErrorFromErr("missing required argument 'message'", err), nil
 		}
-		return mcp.NewToolResultText("echo: " + text), nil
+		return mcp.NewToolResultText(fmt.Sprintf("echo: %s", msg)), nil
 	})
 
-	// 4) Streamable HTTP 서버 래핑 (SSE 아님)
-	//    /mcp 경로를 MCP Streamable HTTP 엔드포인트로 사용
-	streamSrv := server.NewStreamableHTTPServer(
+	// Streamable HTTP 서버 생성
+	streamServer := server.NewStreamableHTTPServer(
 		s,
-		server.WithEndpointPath("/mcp"),
+		server.WithEndpointPath("/mcp"), // 기본도 /mcp 이지만 명시적으로 지정
 	)
 
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", streamSrv)
-	mux.Handle("/mcp/", streamSrv)
-
-	log.Println("MCP Streamable HTTP server listening on :3000/mcp")
-	if err := http.ListenAndServe(":3000", mux); err != nil {
-		log.Fatalf("server failed: %v", err)
+	log.Println("MCP Streamable HTTP server listening on :8080/mcp")
+	if err := streamServer.Start(":8080"); err != nil {
+		log.Fatalf("streamable HTTP server error: %v", err)
 	}
 }
